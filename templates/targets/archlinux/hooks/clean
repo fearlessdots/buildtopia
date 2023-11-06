@@ -1,0 +1,10 @@
+#!/usr/bin/bash
+set -e
+
+cd "${TARGET_DIR}/craft"
+
+rm -rf *.tar *.tar.gz *.tgz pkg/ src/ *.pkg.tar.zst *.pkg.tar.xz \
+	*.deb *.rpm *.zip *.7z *.tz *.AppImage *.part *.tar.zst *.sig \
+	LICENSE termux .SRCINFO *.pacman
+
+exit 0

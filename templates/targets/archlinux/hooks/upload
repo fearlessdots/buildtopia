@@ -1,0 +1,61 @@
+#!/usr/bin/bash
+set -e
+
+#
+## CONFIGURATION VARIABLES
+#
+
+server_address=""
+server_port=""
+
+#
+##
+#
+
+cd "${TARGET_DIR}/craft"
+
+${BUILDTOPIA_UTILS} section "Uploading packages to repository"
+
+#
+## X86_64
+#
+
+echo ""
+
+package_name=$(echo *-x86_64.pkg.tar.zst)
+server_url="${server_address}:${server_port}/repos/archlinux/x86_64"
+
+echo "    - $(gum style --foreground '#55aaff' ${package_name}) => $(gum style --foreground '#55ff7f' ${server_url})"
+curl --silent -X POST "${server_url}/api/upload" -F "upload[]=@./${package_name}" -F "upload[]=@./${package_name}.sig"
+curl --silent -X POST "${server_url}/api/update"
+${BUILDTOPIA_UTILS} success "        > Finished"
+
+#
+## AARCH64
+#
+
+echo ""
+
+package_name=$(echo *-aarch64.pkg.tar.xz)
+server_url="${server_address}:${server_port}/repos/archlinux/aarch64"
+
+echo "    - $(gum style --foreground '#55aaff' ${package_name}) => $(gum style --foreground '#55ff7f' ${server_url})"
+curl --silent -X POST "${server_url}/api/upload" -F "upload[]=@./${package_name}" -F "upload[]=@./${package_name}.sig"
+curl --silent -X POST "${server_url}/api/update"
+${BUILDTOPIA_UTILS} success "        > Finished"
+
+#
+## TERMUX
+#
+
+# echo ""
+# 
+# cd ./termux
+# 
+# package_name=$(echo *-aarch64.pkg.tar.xz)
+# server_url="${server_address}:${server_port}/repos/termux-pacman/aarch64"
+# 
+# echo "    - $(gum style --foreground '#55aaff' ${package_name}) => $(gum style --foreground '#55ff7f' ${server_url})"
+# curl --silent -X POST "${server_url}/api/upload" -F "upload[]=@./${package_name}" -F "upload[]=@./${package_name}.sig"
+# curl --silent -X POST "${server_url}/api/update"
+# ${BUILDTOPIA_UTILS} success "        > Finished"

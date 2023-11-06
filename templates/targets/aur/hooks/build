@@ -1,0 +1,6 @@
+#!/usr/bin/bash
+set -e
+
+cd "${TARGET_DIR}/craft"
+
+makepkg -sf

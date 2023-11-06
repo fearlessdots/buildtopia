@@ -1,0 +1,17 @@
+#!/usr/bin/bash
+set -e
+
+sourceUrl=$1
+
+# Get latest tag
+
+latestTag=$(curl --silent $sourceUrl/-/releases.json | jq '.[0].tag')
+
+if [ -z "${latestTag}" ]
+then
+	${BUILDTOPIA_UTILS} error "    > Distribution version returned is empty. An error has occurred."
+	exit 1
+else
+	echo ${latestTag}
+	exit 0
+fi

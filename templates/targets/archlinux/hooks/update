@@ -1,0 +1,156 @@
+#!/usr/bin/bash
+set -e
+
+cd "${TARGET_DIR}/craft"
+
+#
+##
+#
+
+restore_pkgbuild() {
+	${BUILDTOPIA_UTILS} attention "    > Restoring PKGBUILD"
+	mv ${TARGET_TEMP_DIR}/PKGBUILD ./PKGBUILD
+}
+
+#
+## CONFIGURATION VARIABLES
+#
+
+packageName=$(cat ${TARGET_DIR}/config.json | jq -r '.package')
+packageSourceUrl=$(cat ${TARGET_DIR}/config.json | jq -r '.source.url')
+packageSourceVerifyHook=$(cat ${TARGET_DIR}/config.json | jq -r '.source.hook')
+
+#
+## PRE_VERIFY
+#
+
+#
+## PRE_UPDATE
+#
+
+${BUILDTOPIA_UTILS} section "Backing up old PKGBUILD"
+cp PKGBUILD ${TARGET_TEMP_DIR}/PKGBUILD
+
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+echo ""
+
+#
+## VERIFY
+#
+
+${BUILDTOPIA_UTILS} section "Comparing source and distribution versions"
+
+localVersion=$(cat PKGBUILD | grep 'pkgver=' | sed 's/pkgver=//' | awk '{print $1}' | head -n 1 | sed 's/"//g') || (${BUILDTOP
+IA_UTILS} error "    > Failed to get package version (pkgver) from PKGBUILD" && exit 1)
+localVersionRel=$(cat PKGBUILD | grep 'pkgrel=' | sed 's/pkgrel=//' | awk '{print $1}' | head -n 1 | sed 's/"//g') || (${BUILD
+TOPIA_UTILS} error "    > Failed to get package release (pkgrel) from PKGBUILD" && exit 1)
+sourceVersion=$(${CRATE_DIR}/sources/${packageSourceVerifyHook} "${packageSourceUrl}") || (${BUILDTOPIA_UTILS} error "    > Failed to get latest version from source" && exit 1)
+
+echo ""
+echo "Distribution version: ${localVersion}"
+echo "Source version: ${sourceVersion}"
+echo ""
+
+if [ "${sourceVersion}" = "${localVersion}" ]
+then
+	${BUILDTOPIA_UTILS} msg "#63ff94" "    > Package is up-to-date"
+	exit 0
+else
+	${BUILDTOPIA_UTILS} attention "    > A newer version is available"
+fi
+
+echo ""
+
+#
+## UPDATE
+#
+
+${BUILDTOPIA_UTILS} section "Updating PKGBUILD"
+
+sed -i "s/pkgver=.*/pkgver=${sourceVersion}/g" PKGBUILD || (restore_pkgbuild && exit 1)
+
+# Reset pkgrel
+${BUILDTOPIA_UTILS} attention '    > Resetting pkgrel to 1'
+sed -i "s/pkgrel=.*/pkgrel=1/" PKGBUILD || (restore_pkgbuild && exit 1)
+
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+echo ""
+
+#
+## POST_UPDATE
+#
+
+${BUILDTOPIA_UTILS} section "Updating checksums"
+
+updpkgsums || (restore_pkgbuild && exit 1)
+
+echo ""
+
+${BUILDTOPIA_UTILS} section "Comparing PKGBUILDs"
+
+diff --color ${TARGET_TEMP_DIR}/PKGBUILD PKGBUILD || true
+# The `diff` command in Unix-like systems returns an exit code of 1 when
+# it detects differences between two files. By convention, an exit code of
+# 0 indicates that no differences were found.
+
+echo ""
+
+gum confirm "Confirm changes?" || \
+	(${BUILDTOPIA_UTILS} error "    > Operation cancelled by the user" && \
+	echo "" && \
+	restore_pkgbuild && \
+	exit 1)
+
+echo ""
+
+${BUILDTOPIA_UTILS} section "Checking package"
+
+${TARGET_HOOKS_DIR}/check || \
+	(${BUILDTOPIA_UTILS} error "    > Failed to check package" && \
+	echo "" && \
+	restore_pkgbuild && \
+	exit 1)
+
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+echo ""
+
+${BUILDTOPIA_UTILS} section "Cleaning build objects"
+
+${TARGET_HOOKS_DIR}/clean || \
+	(${BUILDTOPIA_UTILS} error "    > Failed to clean build objects" && \
+	echo "" && \
+	exit 1)
+
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+echo ""
+
+${BUILDTOPIA_UTILS} section "Updating .SRCINFO"
+makepkg --printsrcinfo > .SRCINFO
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+echo ""
+
+${BUILDTOPIA_UTILS} section "Adding .SRCINFO and PKGBUILD to git staging area"
+git add -f .SRCINFO PKGBUILD
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+echo ""
+
+${BUILDTOPIA_UTILS} section "Creating a new git commit"
+commitMessage="Update to ${sourceVersion}"
+
+echo ""
+echo "Commit message: ${commitMessage}"
+echo ""
+gum confirm "Confirm commit?" || \
+	(${BUILDTOPIA_UTILS} error "    > Operation cancelled by the user" && \
+	exit 1)
+
+git commit .SRCINFO PKGBUILD -m "${commitMessage}"
+${BUILDTOPIA_UTILS} success "    > Finished"
+
+exit 0

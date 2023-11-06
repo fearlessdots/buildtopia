@@ -1,0 +1,56 @@
+#!/usr/bin/bash
+set -e
+
+# Get target configuration from user input
+targetName=${TARGET_NAME}
+targetAurPackage=$(gum input --prompt "> AUR package name -> " --cursor.mode "blink" --value "${targetName}") || \
+	(${BUILDTOPIA_UTILS} error "Failed to get user input" && \
+	exit 1)
+
+targetSourceUrl=$(gum input --prompt "> Source URL -> " --cursor.mode "blink" --value "") || \
+	(${BUILDTOPIA_UTILS} error "Failed to get user input" && \
+	exit 1)
+
+targetSourceVerifyHook=$(gum file ${CRATE_DIR}/sources) || \
+	(${BUILDTOPIA_UTILS} error "Failed to get user input" && \
+	exit 1)
+
+targetSourceVerifyHook=$(basename ${targetSourceVerifyHook})
+
+# Display configuration and ask for user confirmation
+echo ""
+echo "Target configuration:"
+echo ""
+${BUILDTOPIA_UTILS} hr '-' 0.45
+echo "$($BUILDTOPIA_UTILS msg '#58ff74' 'Name:') ${targetName}"
+echo "$($BUILDTOPIA_UTILS msg '#58ff74' 'AUR name:') ${targetAurPackage}"
+echo "$($BUILDTOPIA_UTILS msg '#58ff74' 'Source URL:') ${targetSourceUrl}"
+echo "$($BUILDTOPIA_UTILS msg '#58ff74' 'Source verify hook:') ${targetSourceVerifyHook}"
+${BUILDTOPIA_UTILS} hr '-' 0.45
+echo ""
+
+gum confirm "Write content to target configuration file?" || (${BUILDTOPIA_UTILS} error "> Operation cancelled by the user" && exit 1)
+
+# Create the JSON content
+jsonContent=$(jq -n \
+--arg aurPackageName "${targetAurPackage}" \
+--arg sourceUrl "${targetSourceUrl}" \
+--arg sourceVerifyHook "${targetSourceVerifyHook}" \
+'{
+	"package": $aurPackageName,
+	"source": {
+		"url": $sourceUrl,
+		"hook": $sourceVerifyHook
+	}
+}')
+
+# Write content to configuration file
+echo "${jsonContent}" > ${TARGET_DIR}/config.json || \
+	(${BUILDTOPIA_UTILS} error "Failed to write to configuration file" && \
+	exit 1)
+
+# Clone AUR repository
+${BUILDTOPIA_UTILS} attention "Cloning AUR git repository"
+git clone "ssh://aur@aur.archlinux.org/${targetAurPackage}.git" ${TARGET_DIR}/craft
+
+exit 0

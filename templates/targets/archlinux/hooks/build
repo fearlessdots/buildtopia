@@ -1,0 +1,720 @@
+#!/usr/bin/bash
+set -e
+
+#
+##
+#
+
+print_colored_msg() {
+	color_hex=$1
+	message=$2
+
+	gum style --foreground "$color_hex" "$message"
+}
+
+unmount_child() {
+	findmnt --json | jq -r --arg dir "$1" '
+	def recurse:
+	  if (.children? | length > 0) then
+	    .children[] | recurse
+	  else
+	    .
+	  end;
+	(.filesystems[] | recurse) | select(.target | startswith($dir)) | .target' | while read -r mountpoint; do
+		print_colored_msg "#ff8a82" "    - ${mountpoint}"
+		sudo umount "${mountpoint}"
+	done
+
+	sleep 2
+}
+
+build_failed() {
+	echo ""
+	print_colored_msg "#ff5050" "        > Failed to build package"
+
+	echo ""
+	# Unmount all files/directories (run two times to make sure...)
+	print_colored_msg "#808080" "> Unmounting files and directories"
+	unmount_child "${CHROOT_DIR}"
+	unmount_child "${CHROOT_DIR}"
+	echo ""
+
+	exit 1
+}
+
+setup_qemu_binfmt() {
+	QEMU_DIR="${CRATE_DIR}/rootfs/qemu-binaries"
+	BINFMT_DIR="/run/binfmt.d"
+
+	echo ""
+
+	print_colored_msg "#808080" "> Setting up QEMU binfmt configuration"
+
+	if [ ! -d ${BINFMT_DIR} ]
+	then
+		print_colored_msg "#ffa860" "        > Creating directory at ${BINFMT_DIR}"
+		sudo mkdir -p ${BINFMT_DIR}
+	fi
+
+	sudo cp ${QEMU_DIR}/*.conf ${BINFMT_DIR}/
+
+	sudo systemctl restart systemd-binfmt.service
+
+	print_colored_msg "#55aaff" "    > Finished"
+
+	echo ""
+}
+
+cleanup_qemu_binfmt() {
+	QEMU_DIR="${CRATE_DIR}/rootfs/qemu-binaries"
+	BINFMT_DIR="/run/binfmt.d"
+
+	echo ""
+
+	print_colored_msg "#808080" "> Cleaning up QEMU binfmt configuration"
+
+	sudo rm ${BINFMT_DIR}/*.conf
+
+	sudo systemctl restart systemd-binfmt.service
+
+	print_colored_msg "#55aaff" "    > Finished"
+
+	echo ""
+}
+
+termux_build_failed() {
+	echo ""
+	print_colored_msg "#ff5050" "        > Failed to build package"
+	
+	##
+	### CHROOT CLEANUP
+	##
+
+	echo ""
+	print_colored_msg '#808080' '> Cleaning up chroot'
+	
+	echo ""
+	
+	# Delete the veth pair
+	print_colored_msg '#808080' '    > Removing virtual network connection'
+	sudo ip link delete $VETH0_NAME || true
+	print_colored_msg "#55aaff" "        > Finished"
+	
+	echo ""
+	
+	# Disable IP forwarding and NAT on the host
+	print_colored_msg "#808080" "    > Disabling IP forwarding and NAT on the host"
+	sudo bash -c 'echo 0 > /proc/sys/net/ipv4/ip_forward'
+	sudo iptables -t nat -D POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
+	print_colored_msg "#55aaff" "        > Finished"
+	
+	echo ""
+	
+	print_colored_msg "#808080" "    > Killing the unshare process"
+	sudo kill $UNSHARE_PID || true
+	print_colored_msg "#55aaff" "        > Finished"
+	
+	echo ""
+	
+	print_colored_msg "#808080" "    > Killing the tmux session"
+	sudo tmux kill-session -t $TMUX_SESSION_NAME || true
+	print_colored_msg "#55aaff" "        > Finished"
+	
+	##
+	###
+	##
+	
+	echo ""
+	
+	# Unmount all files/directories (run two times to make sure...)
+	print_colored_msg '#808080' '> Unmounting files and directories'
+	unmount_child "${CHROOT_DIR}"
+	unmount_child "${CHROOT_DIR}"
+	
+	echo ""
+
+	exit 1
+}
+
+build_archlinux_x86_64() {
+	echo "
+  __  _____   __      __   _  _
+  \ \/ ( _ ) / /_    / /_ | || |
+   \  // _ \| '_ \  | '_ \| || |_
+   /  \ (_) | (_) | | (_) |__   _|
+  /_/\_\___/ \___/___\___/   |_|
+                |_____|"
+	echo ""
+	echo $(print_colored_msg "#808080" "Building package for architecture:") $(print_colored_msg "#55aaff" "X86_64")
+	echo ""
+
+	CHROOT_DIR="${CRATE_DIR}/rootfs/archlinux/x86_64"
+
+	print_colored_msg "#808080" "> Validating sudo"
+	sudo -v
+
+	echo ""
+
+	# If any command fails, run build_failed function
+	trap 'build_failed "${CHROOT_DIR}"' ERR
+
+	# Catch the SIGINT signal (Ctrl+C)
+	trap 'build_failed "${CHROOT_DIR}"' SIGINT
+
+	# Bind mount necessary files and directories
+	print_colored_msg "#808080" "> Bind mounting files and directories"
+	sudo mount --bind /etc/hosts "${CHROOT_DIR}/etc/hosts" && \
+		echo "        - $(print_colored_msg '#55aaff' '/etc/hosts') => $(print_colored_msg '#55ff7f' '/etc/hosts')"
+	sudo mount --bind /etc/pacman.d/mirrorlist "${CHROOT_DIR}/etc/pacman.d/mirrorlist"  && \
+		echo "        - $(print_colored_msg '#55aaff' '/etc/pacman.d/mirrorlist') => $(print_colored_msg '#55ff7f' '/etc/pacman.d/mirrorlist')"
+	sudo mount --bind /home/$USER/.gnupg "${CHROOT_DIR}/home/archie/.gnupg"  && \
+		echo "        - $(print_colored_msg '#55aaff' /home/$USER/.gnupg) => $(print_colored_msg '#55ff7f' '/home/archie/.gnupg')"
+	if [ ! -d "${CHROOT_DIR}/build" ]
+	then
+		sudo mkdir -p "${CHROOT_DIR}/build"
+	fi
+	sudo mount --bind ${TARGET_DIR}/craft "${CHROOT_DIR}/build" && \
+		echo "        - $(print_colored_msg '#55aaff' ${CHROOT_DIR}/craft) => $(print_colored_msg '#55ff7f' '/build')"
+
+	echo ""
+
+	# Start chroot
+	print_colored_msg "#808080" "> Starting chroot"
+	echo ""
+	sudo unshare --pid --uts --ipc --fork --wd=/ chroot ${CHROOT_DIR} /usr/bin/env -i bash << 'EOF'
+		set -e
+
+		print_colored_msg() {
+			color_hex=$1
+			message=$2
+		
+			gum style --foreground "$color_hex" "$message"
+		}
+
+		# Add environmnet variables
+		export COLORTERM=truecolor
+		export TERM=xterm-256color
+		export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+		export LANG=en_US.UTF-8
+		export LC_NUMERIC=en_US.UTF-8
+		export LC_CTYPE=en_US.UTF-8
+		export LC_TIME=en_US.UTF-8
+		export PAGER=bat
+		export EDITOR=micro
+		export PACKAGER=""
+
+		# Mount necessary filesystems
+		print_colored_msg "#808080" "    > Mounting filesystems"
+		mount -t proc proc /proc && \
+			echo "        - $(print_colored_msg '#55aaff' '/proc') ($(print_colored_msg '#55ff7f' 'procfs'))"
+		mount -t devtmpfs dev /dev && \
+			echo "        - $(print_colored_msg '#55aaff' '/dev') ($(print_colored_msg '#55ff7f' 'devtmpfs'))"
+		mount -t devpts devpts /dev/pts && \
+			echo "        - $(print_colored_msg '#55aaff' '/dev/pts') ($(print_colored_msg '#55ff7f' 'devpts'))"
+		mount -t tmpfs tmp /tmp && \
+			echo "        - $(print_colored_msg '#55aaff' '/tmp') ($(print_colored_msg '#55ff7f' 'tmpfs'))"
+
+		echo ""
+
+		print_colored_msg "#808080" "    > Building package (as archie)"
+
+		echo ""
+
+		# Change to build directory
+		print_colored_msg "#cee89c" "        > Changing to /build directory"
+		cd /build
+
+		echo ""
+
+		# Login as non-root user
+		print_colored_msg "#cee89c" "        > Logging in as archie"
+		su archie
+
+		echo ""
+
+		set -e
+
+		print_colored_msg() {
+			color_hex=$1
+			message=$2
+		
+			gum style --foreground "$color_hex" "$message"
+		}
+
+		print_colored_msg "#cee89c" "        > Updating packages"
+		yes | sudo pacman -Syu
+
+		echo ""
+
+		# Build package
+		print_colored_msg "#cee89c" "        > Running makepkg"
+		yes | makepkg -sf --sign
+
+		echo ""
+
+		# Exit from non-root session
+		exit
+
+		print_colored_msg "#55aaff" "        > Package built successfully"
+
+		echo ""
+
+		sleep 2
+EOF
+
+	# Unmount all files/directories (run two times to make sure...)
+	print_colored_msg "#808080" "> Unmounting files and directories"
+	unmount_child "${CHROOT_DIR}"
+	unmount_child "${CHROOT_DIR}"
+	echo ""
+}
+
+build_archlinux_aarch64() {
+	echo "
+                        _      __   _  _
+    ____  ____ _ __ ___| |__  / /_ | || |
+   / _  |/ _  | '__/ __| '_ \| '_ \| || |_
+  | (_| | (_| | | | (__| | | | (_) |__   _|
+   \__,_|\__,_|_|  \___|_| |_|\___/   |_|"
+	echo ""
+	echo $(print_colored_msg "#808080" "Building package for architecture:") $(print_colored_msg "#55aaff" "aarch64")
+	echo ""
+
+	CHROOT_DIR="${CRATE_DIR}/rootfs/archlinux/aarch64"
+
+	print_colored_msg "#808080" "> Validating sudo"
+	sudo -v
+
+	echo ""
+
+	# If any command fails, run build_failed function
+	trap 'build_failed "${CHROOT_DIR}"' ERR
+
+	# Catch the SIGINT signal (Ctrl+C)
+	trap 'build_failed "${CHROOT_DIR}"' SIGINT
+
+	# Bind mount necessary files and directories
+	print_colored_msg "#808080" "> Bind mounting files and directories"
+	sudo mount --bind /etc/hosts "${CHROOT_DIR}/etc/hosts" && \
+		echo "        - $(print_colored_msg '#55aaff' '/etc/hosts') => $(print_colored_msg '#55ff7f' '/etc/hosts')"
+	sudo mount --bind /home/$USER/.gnupg "${CHROOT_DIR}/home/archie/.gnupg"  && \
+		echo "        - $(print_colored_msg '#55aaff' /home/$USER/.gnupg) => $(print_colored_msg '#55ff7f' '/home/archie/.gnupg')"
+	if [ ! -d "${CHROOT_DIR}/build" ]
+		then
+		sudo mkdir -p "${CHROOT_DIR}/build"
+		fi
+		sudo mount --bind ${TARGET_DIR}/craft "${CHROOT_DIR}/build" && \
+			echo "        - $(print_colored_msg '#55aaff' ${CHROOT_DIR}/craft) => $(print_colored_msg '#55ff7f' '/build')"
+
+		echo ""
+
+		# Start chroot
+		print_colored_msg "#808080" "> Starting chroot"
+		echo ""
+		sudo unshare --pid --uts --ipc --fork --wd=/ chroot ${CHROOT_DIR} /usr/bin/env -i bash << 'EOF'
+			set -e
+
+			print_colored_msg() {
+				color_hex=$1
+				message=$2
+			
+				gum style --foreground "$color_hex" "$message"
+			}
+
+			# Add environmnet variables
+			export COLORTERM=truecolor
+			export TERM=xterm-256color
+			export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+			export LANG=en_US.UTF-8
+			export LC_NUMERIC=en_US.UTF-8
+			export LC_CTYPE=en_US.UTF-8
+			export LC_TIME=en_US.UTF-8
+			export PAGER=bat
+			export EDITOR=micro
+			export PACKAGER=""
+
+	        # Mount necessary filesystems
+	        print_colored_msg "#808080" "    > Mounting filesystems"
+	        mount -t proc proc /proc && \
+	            echo "        - $(print_colored_msg '#55aaff' '/proc') ($(print_colored_msg '#55ff7f' 'procfs'))"
+	        mount -t devtmpfs dev /dev && \
+	            echo "        - $(print_colored_msg '#55aaff' '/dev') ($(print_colored_msg '#55ff7f' 'devtmpfs'))"
+	        mount -t devpts devpts /dev/pts && \
+	            echo "        - $(print_colored_msg '#55aaff' '/dev/pts') ($(print_colored_msg '#55ff7f' 'devpts'))"
+	        mount -t tmpfs tmp /tmp && \
+	            echo "        - $(print_colored_msg '#55aaff' '/tmp') ($(print_colored_msg '#55ff7f' 'tmpfs'))"
+
+	        echo ""
+
+	        print_colored_msg "#808080" "    > Building package (as archie)"
+
+	        echo ""
+
+	        # Change to build directory
+	        print_colored_msg "#cee89c" "        > Changing to /build directory"
+	        cd /build
+
+	        echo ""
+
+	        # Login as non-root user
+	        print_colored_msg "#cee89c" "        > Logging in as archie"
+	        su archie
+
+	        echo ""
+
+	        set -e
+
+	        print_colored_msg() {
+	        	color_hex=$1
+	        	message=$2
+	        
+	        	gum style --foreground "$color_hex" "$message"
+	        }
+
+			print_colored_msg "#cee89c' '        > Updating packages"
+			yes | sudo pacman -Syu
+
+			echo ""
+
+	        # Build package
+	        print_colored_msg "#cee89c" "        > Running makepkg"
+	        yes | makepkg -sf --sign
+
+	        echo ""
+
+	        # Exit from non-root session
+	        exit
+
+	        print_colored_msg "#55aaff" "        > Package built successfully"
+
+	        echo ""
+
+	        sleep 2
+EOF
+
+    # Unmount all files/directories (run two times to make sure...)
+    print_colored_msg "#808080" "> Unmounting files and directories"
+    unmount_child "${CHROOT_DIR}"
+    unmount_child "${CHROOT_DIR}"
+    echo ""
+}
+
+build_archlinux_termux() {
+	echo "
+   _____
+  |_   _|__ _ __ _ __ ___  _   ___  __
+    | |/ _ \ '__| '_   _ \| | | \ \/ /
+    | |  __/ |  | | | | | | |_| |>  <
+    |_|\___|_|  |_| |_| |_|\__,_/_/\_\
+"
+	echo ""
+	echo $(print_colored_msg "#808080" "Building package for architecture:") $(print_colored_msg "#55aaff" "aarch64")
+	echo ""
+
+	CHROOT_DIR="${CRATE_DIR}/rootfs/termux-pacman/aarch64"
+
+    print_colored_msg "#808080" "> Validating sudo"
+    sudo -v
+
+    echo ""
+
+	# If any command fails, run build_failed function
+	trap 'termux_build_failed "${CHROOT_DIR}"' ERR
+
+	# Catch the SIGINT signal (Ctrl+C)
+	trap 'termux_build_failed "${CHROOT_DIR}"' SIGINT
+
+	# Setup up custom QEMU binaries (via binfmt)
+	setup_qemu_binfmt
+
+	# Bind mount necessary files and directories
+	echo "$(gum style --foreground '#808080' '> Bind mounting files and directories')"
+	sudo mount --bind /etc/hosts "${CHROOT_DIR}/system/etc/hosts" && \
+		echo "        - $(print_colored_msg '#55aaff' '/etc/hosts') => $(print_colored_msg '#55ff7f' '/system/etc/hosts')"
+	sudo mount --bind /home/$USER/.gnupg "${CHROOT_DIR}/data/data/com.termux/files/home/.gnupg" && \
+		echo "        - $(print_colored_msg '#55aaff' /home/$USER/.gnupg) => $(print_colored_msg '#55ff7f' '/data/data/com.termux/files/home/.gnupg')"
+	if [ ! -d "${TARGET_DIR}/craft/termux" ]
+	then
+		mkdir -p "${TARGET_DIR}/craft/termux"
+	fi
+	cp "${TARGET_DIR}/craft/PKGBUILD" "${TARGET_DIR}/craft/termux/PKGBUILD"
+	cp ${TARGET_DIR}/craft/*.tar.gz ${TARGET_DIR}/craft/termux/ 2> /dev/null || true
+	if [ ! -d "${CHROOT_DIR}/build" ]
+		then
+		sudo mkdir -p "${CHROOT_DIR}/build"
+		fi
+		sudo mount --bind ${TARGET_DIR}/craft "${CHROOT_DIR}/build" && \
+			echo "        - $(print_colored_msg '#55aaff' ${CHROOT_DIR}/craft) => $(print_colored_msg '#55ff7f' '/build')"
+
+		echo ""
+
+		##
+		### CHROOT SETUP
+		##
+
+		run_nsenter() {
+			local pid=$1
+			local cmd=$2
+			shift 2
+			sudo nsenter --all -t "$pid" -n sh -c "$cmd"
+		}
+		
+		run_in_tmux_session() {
+			local session_name=$1
+			local cmd=$2
+			shift 2
+			sudo tmux attach-session -t "$session"
+		}
+
+		print_colored_msg '#808080' '> Setting up chroot'
+
+		echo ""
+
+		# Get the current directory
+		INITIAL_SHELL_WD=$PWD
+
+		# Create an ID based on the current date
+		ID=$(date +%Y%m%d%H%M%S)
+
+		print_colored_msg '#808080' '    > Creating a shell process with new namespaces'
+
+		# Get the PID of the current shell
+		INITIAL_SHELL_PID=$$
+		echo "        - $(print_colored_msg '#808080' 'Initial shell PID: ') $(print_colored_msg '#55aaff' $INITIAL_SHELL_PID)"
+
+		# Create a new tmux session and start a new shell in a new network namespace
+		TMUX_SESSION_NAME="termux-chroot-$ID"
+		echo "        - $(print_colored_msg '#808080' 'Tmux session name: ') $(print_colored_msg '#55aaff' $TMUX_SESSION_NAME)"
+		sudo tmux new-session -d -s $TMUX_SESSION_NAME unshare --net --pid --uts --ipc --fork sh
+
+		# Wait for the new shell to start up
+		sleep 2
+
+		# Get the PID of the tmux session process
+		TMUX_SESSION_PID=$(pgrep -f "tmux new-session -d -s $TMUX_SESSION_NAME")
+		echo "        - $(print_colored_msg '#808080' 'Tmux session PID: ') $(print_colored_msg '#55aaff' $TMUX_SESSION_PID)"
+
+		# Get the PID of the unshare process
+		UNSHARE_PID=$(sudo pgrep -P $TMUX_SESSION_PID)
+		echo "        - $(print_colored_msg '#808080' 'Unshare PID: ') $(print_colored_msg '#55aaff' $UNSHARE_PID)"
+
+		# Get the PID of the unshare shell process
+		UNSHARE_SHELL_PID=$(sudo pgrep -P $UNSHARE_PID)
+		echo "        - $(print_colored_msg '#808080' 'Unshare shell PID: ') $(print_colored_msg '#55aaff' $UNSHARE_SHELL_PID)"
+
+		echo ""
+
+		VETH0_NAME="termux_veth0"
+		VETH1_NAME="termux-veth1"
+
+		print_colored_msg '#808080' '    > Setting up virtual network connection'
+
+		# Create a new veth pair
+		sudo ip link add $VETH0_NAME type veth peer name $VETH1_NAME
+
+		# Move termux_veth1 to the new network namespace
+		sudo ip link set $VETH1_NAME netns $UNSHARE_SHELL_PID
+
+		# Configure the IP address and bring up termux_veth0
+		sudo ip addr add 192.168.1.1/24 dev $VETH0_NAME
+		sudo ip link set $VETH0_NAME up
+
+		# In the new namespace, configure veth1 and set up the default route
+		sudo nsenter --all -t $UNSHARE_SHELL_PID -n bash -c "
+		ip addr add 192.168.1.2/24 dev $VETH1_NAME
+		ip link set $VETH1_NAME up
+		ip link set lo up
+		ip route add default via 192.168.1.1
+		"
+
+		print_colored_msg "#55aaff" "        > Finished"
+
+		echo ""
+
+		# Enable IP forwarding and NAT on the host
+		print_colored_msg "#808080" "    > Enabling IP forwarding and NAT on the host"
+		sudo bash -c 'echo 1 > /proc/sys/net/ipv4/ip_forward'
+		sudo iptables -t nat -A POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
+
+		print_colored_msg "#55aaff" "        > Finished"
+
+		##
+		###
+		##
+
+		echo ""
+
+	    # Start chroot
+	    print_colored_msg "#808080" "> Starting chroot"
+
+	    echo ""
+
+		sudo nsenter --all -t $UNSHARE_SHELL_PID -n chroot ${CHROOT_DIR} /system/bin/busybox env -i /system/bin/sh << 'EOF'
+			set -e
+
+			print_colored_msg() {
+				color_hex=$1
+				message=$2
+			
+				gum style --foreground "$color_hex" "$message"
+			}
+
+			# Add environmnet variables
+			export COLORTERM=truecolor
+			export TERM=xterm-256color
+			export PATH="/system/bin:/data/data/com.termux/files/usr/bin"
+
+	        # Mount necessary filesystems
+	        busybox mount -t proc proc /proc && \
+	        	print_colored_msg "#808080" "    > Mounting filesystems" && \
+	            echo "        - $(print_colored_msg '#55aaff' '/proc') ($(print_colored_msg '#55ff7f' 'procfs'))"
+	        busybox mount -t devtmpfs dev /dev && \
+	            echo "        - $(print_colored_msg '#55aaff' '/dev') ($(print_colored_msg '#55ff7f' 'devtmpfs'))"
+	        busybox mount -t devpts devpts /dev/pts && \
+	            echo "        - $(print_colored_msg '#55aaff' '/dev/pts') ($(print_colored_msg '#55ff7f' 'devpts'))"
+	        busybox mount -t tmpfs tmp /tmp && \
+	            echo "        - $(print_colored_msg '#55aaff' '/tmp') ($(print_colored_msg '#55ff7f' 'tmpfs'))"
+
+			echo ""
+
+			print_colored_msg "#808080" "    > Starting dnsmasq"
+			/system/bin/mksh -T /dev/ptmx -c "/system/bin/dnsmasq -u root -g root --pid-file /dnsmasq.pid"
+			print_colored_msg "#55aaff" "        > Finished"
+
+			sleep 5
+
+	        echo ""
+
+			print_colored_msg "#808080" "    > Building package (as system)"
+
+			echo ""
+
+			# Change to build directory
+			print_colored_msg "#cee89c" "        > Changing to /build/termux directory"
+			cd /build/termux
+
+			echo ""
+
+			# Login as non-root user
+			print_colored_msg "#cee89c" "        > Logging in as system"
+			
+	        su system -c "
+		        set -e
+
+		        sleep 5
+
+				print_colored_msg() {
+					color_hex=\$1
+					message=\$2
+			
+					gum style --foreground \"\$color_hex\" \"\$message\"
+				}
+
+		        # Add environment variables
+		        export LD_PRELOAD=\"/data/data/com.termux/files/usr/lib/libtermux-exec.so\"
+		        export PATH=\"/data/data/com.termux/files/usr/bin\"
+		        export PREFIX=\"/data/data/com.termux/files/usr\"
+		        export HOME=\"/data/data/com.termux/files/home\"
+		        export TMPDIR=\"/tmp\"
+		        export ANDROID_ROOT=/system
+		        export COLORTERM=truecolor
+		        export TERM=xterm-256color
+		        export PACKAGER=\"\"
+
+		        echo \"\"
+
+				print_colored_msg '#cee89c' '        > Updating packages'
+				yes | pacman -Syu
+
+				echo \"\"
+
+				# Build package
+				print_colored_msg '#cee89c' '        > Running makepkg'
+				yes | TERMUX_BUILD= makepkg -sf --sign
+			"
+
+			echo ""
+
+			print_colored_msg "#55aaff" "        > Package built successfully"
+
+			echo ""
+
+			sleep 2
+EOF
+
+		##
+		### CHROOT CLEANUP
+		##
+
+		echo ""
+
+		print_colored_msg '#808080' '> Cleaning up chroot'
+
+		echo ""
+
+		# Delete the veth pair
+		print_colored_msg '#808080' '    > Removing virtual network connection'
+		sudo ip link delete $VETH0_NAME
+		print_colored_msg "#55aaff" "        > Finished"
+
+		echo ""
+
+		# Disable IP forwarding and NAT on the host
+		print_colored_msg "#808080" "    > Disabling IP forwarding and NAT on the host"
+		sudo bash -c 'echo 0 > /proc/sys/net/ipv4/ip_forward'
+		sudo iptables -t nat -D POSTROUTING -s 192.168.1.0/24 -j MASQUERADE
+		print_colored_msg "#55aaff" "        > Finished"
+
+		echo ""
+
+		print_colored_msg "#808080" "    > Killing the unshare process"
+		sudo kill $UNSHARE_PID
+		print_colored_msg "#55aaff" "        > Finished"
+
+		echo ""
+
+		print_colored_msg "#808080" "    > Killing the tmux session"
+		sudo tmux kill-session -t $TMUX_SESSION_NAME
+		print_colored_msg "#55aaff" "        > Finished"
+
+		# Clean up custom QEMU binaries (via binfmt)
+		cleanup_qemu_binfmt
+
+		##
+		###
+		##
+
+		echo ""
+
+		# Unmount all files/directories (run two times to make sure...)
+		print_colored_msg '#808080' '> Unmounting files and directories'
+		unmount_child "${CHROOT_DIR}"
+		unmount_child "${CHROOT_DIR}"
+		echo ""
+}
+
+#
+##
+#
+
+build_archlinux_x86_64
+
+echo ""
+echo ""
+echo "###"
+echo "#####"
+echo "###"
+echo ""
+echo ""
+
+build_archlinux_aarch64
+
+echo ""
+echo ""
+echo "###"
+echo "#####"
+echo "###"
+echo ""
+echo ""
+
+build_archlinux_termux
