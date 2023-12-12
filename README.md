@@ -31,35 +31,35 @@ The modular nature of buildtopia ensures that it can adapt to various use cases 
 
 ## Use Cases
 
-Buildtopia can be used in a wide range of scenarios to simplify and automate operations of projects. Here are some use cases where Buildtopia can be beneficial:
+`buildtopia` can be used in a wide range of scenarios to simplify and automate operations of projects. Here are some use cases where Buildtopia can be beneficial:
 
 ### AUR Packages
 
-Buildtopia can be used to manage and update Arch User Repository (AUR) packages.
+`buildtopia` can be used to manage and update Arch User Repository (AUR) packages.
 
 **Note:** A template for this use case that I use is provided in the `./templates` folder of the source code.
 
 ### Custom Arch Linux Repository
 
-Buildtopia can be used to manage packages in a custom Arch Linux repository (for example, I use `buildtopia` alongside my other program called [pacpilot](https://github.com/fearlessdots/pacpilot), which has a similar structure and has the main objective to host a custom Arch Linux repository).
+`buildtopia` can be used to manage packages in a custom Arch Linux repository (for example, I use `buildtopia` alongside my other program called [pacpilot](https://github.com/fearlessdots/pacpilot), which has a similar structure and has the main objective to host a custom Arch Linux repository).
 
 **Note:** A template for this use case that I use is provided in the `./templates` folder of the source code. For the templates that I use with `pacpilot`, see the `./templates` folder in its repository.
 
 ### Software Development Workflow
 
-Buildtopia can be used to streamline the software development workflow by automating the build, test, and deployment processes (via hooks). It can help manage dependencies, handle version control, and ensure consistent and efficient software development practices.
+`buildtopia` can be used to streamline the software development workflow by automating the build, test, and deployment processes (via hooks). It can help manage dependencies, handle version control, and ensure consistent and efficient software development practices.
 
 ### Continuous Integration/Continuous Deployment (CI/CD)
 
-Buildtopia can be integrated into CI/CD pipelines to automate the building, testing, and deployment of software applications. It can help ensure that changes are quickly and reliably deployed to production environments.
+`buildtopia` can be integrated into CI/CD pipelines to automate the building, testing, and deployment of software applications. It can help ensure that changes are quickly and reliably deployed to production environments.
 
 ### Custom Linux Distributions
 
-Buildtopia can be utilized to create and maintain custom Linux distributions. It can assist in managing packages, configuring system settings, and creating installation images, allowing users to tailor the distribution to their specific needs and preferences.
+`buildtopia` can be utilized to create and maintain custom Linux distributions. It can assist in managing packages, configuring system settings, and creating installation images, allowing users to tailor the distribution to their specific needs and preferences.
 
 ### Academic Projects
 
-Buildtopia can be helpful in academic projects that involve developing and building documents (e.g., latex and marp). It can automate the build process, handle dependencies, and ensure reproducibility of research results.
+`buildtopia` can be helpful in academic projects that involve developing and building documents (e.g., latex and marp). It can automate the build process, handle dependencies, and ensure reproducibility of research results.
 
 ## Installation
 
@@ -165,6 +165,23 @@ The documentation will be generated in the `./docs` directory by default. You ca
 buildtopia docs generate -o <output_dir>
 ```
 
+### Autocompletion Files
+
+It is possible to generate autocompletion files for this program to be used with the following shells:
+
+- `bash`
+- `zsh`
+- `fish`
+- `powershell`
+
+For example, to build the autocompletion file for `fish`, run:
+
+```shell
+buildtopia completion fish > <output_file>
+```
+
+> By default, the `Makefile` and, consequentially, the `PKGBUILD` automatically build the completion files for `bash`, `zsh`, and `fish`.
+
 ## Documentation
 
 ### Available Subcommands
@@ -172,6 +189,7 @@ buildtopia docs generate -o <output_dir>
 - buildtopia: The main command for the program.
   - version: Show the program's version.
   - init: Create user data directory
+  - completion: Generate autocompletion files (`bash`, `zsh`, `fish`, and `powershell`)
   - docs: Program documentation.
     - generate: Generate program documentation (markdown files).
   - utils: Utilities for hooks execution.
