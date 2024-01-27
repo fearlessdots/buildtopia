@@ -1,5 +1,5 @@
 pkgname=buildtopia
-pkgver=0.1.0
+pkgver=0.1.2
 pkgrel=1
 pkgdesc="A versatile tool designed for efficiently storing, managing, and building packages and programs. It offers the convenience of templates, empowering users to easily create new crates and targets. With its comprehensive features, buildtopia streamlines the development process and enhances productivity."
 arch=('i686' 'x86_64' 'armv7h' 'aarch64')
